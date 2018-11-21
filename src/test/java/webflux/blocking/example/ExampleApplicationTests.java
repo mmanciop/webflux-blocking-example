@@ -1,12 +1,6 @@
 package webflux.blocking.example;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertThat;
-import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
-
 import com.google.common.base.Stopwatch;
-import java.time.Duration;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -14,6 +8,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.web.reactive.server.WebTestClient;
+
+import java.time.Duration;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.time.Duration.ofSeconds;
+import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertThat;
+import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(webEnvironment = RANDOM_PORT,
@@ -25,17 +27,17 @@ public class ExampleApplicationTests {
 
 	@Test
 	public void delayedGreetingsWithNoDelay() {
-		testDelay(Duration.ofSeconds(0L));
+		testDelay(ofSeconds(0L));
 	}
 
 	@Test
 	public void delayedGreetingsByOneSecond() {
-		testDelay(Duration.ofSeconds(1L));
+		testDelay(ofSeconds(1L));
 	}
 
 	@Test
 	public void delayedGreetingsByTwoSeconds() {
-		testDelay(Duration.ofSeconds(2L));
+		testDelay(ofSeconds(2L));
 	}
 
 	private void testDelay(final Duration delay) {

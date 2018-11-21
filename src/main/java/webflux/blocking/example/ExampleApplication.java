@@ -1,21 +1,11 @@
 package webflux.blocking.example;
 
-import static reactor.core.publisher.Mono.defer;
-import static reactor.core.publisher.Mono.fromFuture;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.util.Assert;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.config.EnableWebFlux;
@@ -25,61 +15,84 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.ipc.netty.http.HttpResources;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static reactor.core.publisher.Mono.fromRunnable;
+import static reactor.core.scheduler.Schedulers.fromExecutor;
+
 @EnableWebFlux
 @SpringBootApplication
 public class ExampleApplication {
 
-	private static final String EXECUTOR_WORKER_THREAD_NAME_PREFIX = "executor-worker-thread-";
-
 	@RestController
 	public static class Resource {
 
+		private static final String EXECUTOR_WORKER_THREAD_NAME_PREFIX = "executor-worker-thread-";
+
 		private static final Logger LOGGER = LoggerFactory.getLogger(Resource.class);
 
-		private final static ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(10,
-				new ThreadFactory() {
+		private static final ThreadFactory THREAD_FACTORY = new ThreadFactory() {
+
 			final AtomicInteger counter = new AtomicInteger();
 
-					@Override
-					public Thread newThread(Runnable r) {
-						final Thread t = new Thread(r);
-						t.setDaemon(true);
-						t.setName(EXECUTOR_WORKER_THREAD_NAME_PREFIX + counter.incrementAndGet());
-						return t;
-					}
-				});
+			@Override
+			public Thread newThread(final Runnable r) {
+				final Thread t = new Thread(r);
+				t.setDaemon(true);
+				t.setName(EXECUTOR_WORKER_THREAD_NAME_PREFIX + counter.incrementAndGet());
+				return t;
+			}
+		};
 
+		/*
+		 * Restrict the amount of threads to be used: using an elastic scheduler or
+		 * {@code java.util.concurrent.Executors.newCachedThreadPool()} without any throttling or rate limiting will
+		 * potentially cause uncontrolled proliferation of threads, and then one of the main benefits in terms of
+		 * memory usage and of using reactive/nio, namely "few threads, always busy", is gone.
+		 *
+		 * Usually, the maximum amount of threads to be used in parallel to perform blocking work and the maximum idle
+		 * time (amount of time to wait before an idle thread is disposed of), would be made configurable and configured
+		 * based on the amount of resources available in production and the expected workload.
+		 */
+		private final static Scheduler BLOCKING_WORK_SCHEDULER = fromExecutor(Executors.newFixedThreadPool(10,
+				THREAD_FACTORY));
+
+		/*
+		 * This custom scheduler wraps around the way Netty schedules the processing of Http-related tasks.
+		 * It can be used to "go back to the scheduling world" of Reactor/Netty.
+		 */
 		private final static Scheduler REACTOR_HTTP_NIO_SCHEDULER =
-				Schedulers.fromExecutor(HttpResources.get().onServer(true));
+				fromExecutor(HttpResources.get().onServer(true));
 
 		@GetMapping("/hello")
 		public Mono<String> greetBackAfterDelay(
 				@RequestParam(name = "delayInSeconds", defaultValue = "0L")
 				final long delayInSeconds) {
-			/*
-			 * Defer is important to delay the beginning of the wait until the subscription
-			 * of this Mono, as CompletableFuture#runAsync starts to run the code immediately
-			 */
-			return defer(() -> fromFuture(CompletableFuture.runAsync(() -> {
-				try {
-					LOGGER.info("Time to go to sleep!");
 
-					Thread.sleep(TimeUnit.SECONDS.toMillis(delayInSeconds));
+			return fromRunnable(() -> {
+					try {
+						LOGGER.info("Time to go to sleep!");
 
-					LOGGER.info("Time to wake up!");
-				} catch (InterruptedException ex) {
-					throw Exceptions.propagate(ex);
-				}
+						Thread.sleep(SECONDS.toMillis(delayInSeconds));
 
-			}, EXECUTOR_SERVICE)))
+						LOGGER.info("Time to wake up!");
+					} catch (InterruptedException ex) {
+						throw Exceptions.propagate(ex);
+					}
+				})
 				.doOnNext(ignored -> {
-					final String currentThreadName = Thread.currentThread().getName();
-
 					Assert.isTrue(!Schedulers.isInNonBlockingThread(),
 							"Logic should not be on a NonBlocking thread");
+
+					final String currentThreadName = Thread.currentThread().getName();
+
 					Assert.isTrue(currentThreadName.startsWith("executor-worker-thread-"),
 							"Logic should execute on the executor thread");
 				})
+				.subscribeOn(BLOCKING_WORK_SCHEDULER)
 				.publishOn(REACTOR_HTTP_NIO_SCHEDULER)
 				.doOnNext(ignored -> Assert.isTrue(Schedulers.isInNonBlockingThread(),
 						"Emission should take plane on a non-blocking thread"))
